@@ -1,0 +1,138 @@
+# manifests/worker.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: worker-config
+  namespace: cloud-audit
+data:
+  LOG_LEVEL: "INFO"
+  REDIS_HOST: "redis.cloud-audit.svc.cluster.local"
+  WORKER_TYPE: "security"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cloud-credentials
+  namespace: cloud-audit
+type: Opaque
+stringData:
+  AZURE_CLIENT_ID: ""
+  AZURE_CLIENT_SECRET: ""
+  AZURE_TENANT_ID: ""
+  AWS_ACCESS_KEY_ID: ""
+  AWS_SECRET_ACCESS_KEY: ""
+  AWS_REGION: "us-east-1"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: cloud-audit
+  labels:
+    app: worker
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+    spec:
+      containers:
+      - name: worker
+        image: audit-worker:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: worker-config
+              key: LOG_LEVEL
+        - name: REDIS_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: worker-config
+              key: REDIS_HOST
+        - name: REDIS_PORT
+          value: "6379"
+        - name: WORKER_TYPE
+          valueFrom:
+            configMapKeyRef:
+              name: worker-config
+              key: WORKER_TYPE
+        # Azure credentials
+        - name: AZURE_CLIENT_ID
+          valueFrom:
+            secretKeyRef:
+              name: cloud-credentials
+              key: AZURE_CLIENT_ID
+        - name: AZURE_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: cloud-credentials
+              key: AZURE_CLIENT_SECRET
+        - name: AZURE_TENANT_ID
+          valueFrom:
+            secretKeyRef:
+              name: cloud-credentials
+              key: AZURE_TENANT_ID
+        # AWS credentials
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: cloud-credentials
+              key: AWS_ACCESS_KEY_ID
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: cloud-credentials
+              key: AWS_SECRET_ACCESS_KEY
+        - name: AWS_REGION
+          valueFrom:
+            secretKeyRef:
+              name: cloud-credentials
+              key: AWS_REGION
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "300m"
+          limits:
+            memory: "1Gi"
+            cpu: "800m"
+        # Simple liveness check
+        livenessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - ps aux | grep python | grep -v grep
+          initialDelaySeconds: 30
+          periodSeconds: 30
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: worker-hpa
+  namespace: cloud-audit
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: worker
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
